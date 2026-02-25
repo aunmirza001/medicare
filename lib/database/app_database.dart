@@ -19,7 +19,7 @@ class AppDatabase {
 
     return openDatabase(
       path,
-      version: 3,
+      version: 5,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -39,12 +39,59 @@ class AppDatabase {
         createdAt TEXT NOT NULL
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE patient_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        patientId INTEGER NOT NULL,
+        createdAt TEXT NOT NULL,
+        bp TEXT NOT NULL,
+        condition TEXT NOT NULL,
+        prescription TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE record_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recordId INTEGER NOT NULL,
+        filePath TEXT NOT NULL,
+        createdAt TEXT NOT NULL
+      )
+    ''');
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 3) {
       await db.execute(
         "ALTER TABLE patients ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+      );
+    }
+
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS patient_records (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          patientId INTEGER NOT NULL,
+          createdAt TEXT NOT NULL,
+          bp TEXT NOT NULL,
+          prescription TEXT NOT NULL
+        )
+      ''');
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS record_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recordId INTEGER NOT NULL,
+          filePath TEXT NOT NULL,
+          createdAt TEXT NOT NULL
+        )
+      ''');
+    }
+
+    if (oldVersion < 5) {
+      await db.execute(
+        "ALTER TABLE patient_records ADD COLUMN condition TEXT NOT NULL DEFAULT ''",
       );
     }
   }

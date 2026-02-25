@@ -23,16 +23,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   final Set<int> _selectedIds = {};
 
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+
+  bool _searching = false;
   String _searchQuery = '';
+
   String? _filterCategory;
-  int? _filterMonth;
+  DateTimeRange? _dateRange;
 
   bool get _selectionMode => _selectedIds.isNotEmpty;
+
+  static const _categories = <String>['OPD', 'Dermatology'];
 
   @override
   void initState() {
     super.initState();
     _load();
+    _searchController.addListener(() {
+      final v = _searchController.text;
+      if (v == _searchQuery) return;
+      setState(() {
+        _searchQuery = v;
+        _applyFilters();
+        _selectedIds.removeWhere((id) => !_patients.any((p) => p.id == id));
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocus.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -60,6 +83,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  DateTime? _parseCreatedAt(String v) {
+    final dt = DateTime.tryParse(v);
+    if (dt == null) return null;
+    return dt.isUtc ? dt.toLocal() : dt;
+  }
+
   void _applyFilters() {
     var list = List<Patient>.from(_allPatients);
 
@@ -67,17 +96,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
       list = list.where((p) => p.category == _filterCategory).toList();
     }
 
-    if (_filterMonth != null) {
+    if (_dateRange != null) {
+      final start = DateTime(
+        _dateRange!.start.year,
+        _dateRange!.start.month,
+        _dateRange!.start.day,
+      );
+      final endExclusive = DateTime(
+        _dateRange!.end.year,
+        _dateRange!.end.month,
+        _dateRange!.end.day,
+      ).add(const Duration(days: 1));
+
       list = list.where((p) {
-        final dt = DateTime.tryParse(p.createdAt);
+        final dt = _parseCreatedAt(p.createdAt);
         if (dt == null) return false;
-        return dt.month == _filterMonth;
+        return !dt.isBefore(start) && dt.isBefore(endExclusive);
       }).toList();
     }
 
-    if (_searchQuery.isNotEmpty) {
-      final q = _searchQuery.toLowerCase();
-      list = list.where((p) => p.name.toLowerCase().contains(q)).toList();
+    if (_searchQuery.trim().isNotEmpty) {
+      final q = _searchQuery.trim().toLowerCase();
+      list = list.where((p) {
+        final name = p.name.toLowerCase();
+        return name.startsWith(q) || name.contains(q);
+      }).toList();
     }
 
     _patients = list;
@@ -149,28 +192,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _load();
   }
 
-  Future<void> _openSearch() async {
-    final result = await showSearch<String?>(
+  void _startSearch() {
+    if (_selectionMode) return;
+    setState(() {
+      _searching = true;
+    });
+    _searchFocus.requestFocus();
+  }
+
+  void _stopSearch() {
+    setState(() {
+      _searching = false;
+      _searchController.clear();
+      _searchQuery = '';
+      _applyFilters();
+      _selectedIds.removeWhere((id) => !_patients.any((p) => p.id == id));
+    });
+    _searchFocus.unfocus();
+  }
+
+  String _fmtDate(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+
+  String _dateRangeLabel() {
+    final r = _dateRange;
+    if (r == null) return 'Any date';
+    return '${_fmtDate(r.start)} → ${_fmtDate(r.end)}';
+  }
+
+  Future<void> _pickDateRange() async {
+    if (_selectionMode) return;
+
+    final now = DateTime.now();
+    final initial =
+        _dateRange ??
+        DateTimeRange(
+          start: DateTime(now.year, now.month, now.day),
+          end: DateTime(now.year, now.month, now.day),
+        );
+
+    final picked = await showDateRangePicker(
       context: context,
-      delegate: PatientSearchDelegate(initial: _searchQuery),
+      firstDate: DateTime(2000, 1, 1),
+      lastDate: DateTime(2100, 12, 31),
+      initialDateRange: initial,
     );
 
     if (!mounted) return;
+    if (picked == null) return;
 
-    if (result != null) {
-      setState(() {
-        _searchQuery = result;
-        _applyFilters();
-      });
-    }
+    setState(() {
+      _dateRange = picked;
+      _applyFilters();
+      _selectedIds.removeWhere((id) => !_patients.any((p) => p.id == id));
+    });
   }
 
   Future<void> _openFilters() async {
+    if (_selectionMode) return;
+
     final res = await showModalBottomSheet<_FilterResult>(
       context: context,
+      isScrollControlled: true,
       builder: (_) => _FilterSheet(
         selectedCategory: _filterCategory,
-        selectedMonth: _filterMonth,
+        selectedRange: _dateRange,
       ),
     );
 
@@ -178,54 +268,143 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     setState(() {
       _filterCategory = res.category;
-      _filterMonth = res.month;
+      _dateRange = res.range;
       _applyFilters();
+      _selectedIds.removeWhere((id) => !_patients.any((p) => p.id == id));
     });
+  }
+
+  Widget _buildTopChips() {
+    final cat = _filterCategory;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          ChoiceChip(
+            label: const Text('All'),
+            selected: cat == null || cat.isEmpty,
+            onSelected: (_) {
+              setState(() {
+                _filterCategory = null;
+                _applyFilters();
+                _selectedIds.removeWhere(
+                  (id) => !_patients.any((p) => p.id == id),
+                );
+              });
+            },
+          ),
+          const SizedBox(width: 8),
+          ..._categories.map((c) {
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(c),
+                selected: cat == c,
+                onSelected: (_) {
+                  setState(() {
+                    _filterCategory = c;
+                    _applyFilters();
+                    _selectedIds.removeWhere(
+                      (id) => !_patients.any((p) => p.id == id),
+                    );
+                  });
+                },
+              ),
+            );
+          }),
+          const SizedBox(width: 4),
+          ActionChip(
+            label: Text(_dateRangeLabel()),
+            avatar: const Icon(Icons.calendar_today, size: 18),
+            onPressed: _pickDateRange,
+          ),
+          const SizedBox(width: 8),
+          if (_filterCategory != null ||
+              _dateRange != null ||
+              _searchQuery.trim().isNotEmpty)
+            ActionChip(
+              label: const Text('Clear'),
+              avatar: const Icon(Icons.close, size: 18),
+              onPressed: () {
+                setState(() {
+                  _filterCategory = null;
+                  _dateRange = null;
+                  _searchController.clear();
+                  _searchQuery = '';
+                  _applyFilters();
+                  _selectedIds.removeWhere(
+                    (id) => !_patients.any((p) => p.id == id),
+                  );
+                });
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    final allSelected =
+        _patients.isNotEmpty && _selectedIds.length == _patients.length;
+
+    return AppBar(
+      leading: _selectionMode
+          ? IconButton(
+              onPressed: _clearSelection,
+              icon: const Icon(Icons.close),
+            )
+          : (_searching
+                ? IconButton(
+                    onPressed: _stopSearch,
+                    icon: const Icon(Icons.arrow_back),
+                  )
+                : null),
+      title: _selectionMode
+          ? Text('${_selectedIds.length} selected')
+          : (_searching
+                ? TextField(
+                    controller: _searchController,
+                    focusNode: _searchFocus,
+                    textInputAction: TextInputAction.search,
+                    decoration: const InputDecoration(
+                      hintText: 'Search patients...',
+                      border: InputBorder.none,
+                    ),
+                  )
+                : const Text('Dashboard')),
+      actions: [
+        if (!_selectionMode && !_searching)
+          IconButton(onPressed: _startSearch, icon: const Icon(Icons.search)),
+        if (!_selectionMode && !_searching)
+          IconButton(
+            onPressed: _openFilters,
+            icon: const Icon(Icons.filter_list),
+          ),
+        if (_selectionMode)
+          IconButton(
+            onPressed: allSelected ? _clearSelection : _selectAll,
+            icon: const Icon(Icons.select_all),
+          ),
+        if (_selectionMode)
+          IconButton(
+            onPressed: _deleteSelected,
+            icon: const Icon(Icons.delete),
+          ),
+        if (!_selectionMode && !_searching)
+          TextButton(
+            onPressed: () async {
+              await _auth.signOut();
+            },
+            child: const Text('Logout'),
+          ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final allSelected =
-        _patients.isNotEmpty && _selectedIds.length == _patients.length;
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          _selectionMode ? '${_selectedIds.length} selected' : 'Dashboard',
-        ),
-        leading: _selectionMode
-            ? IconButton(
-                onPressed: _clearSelection,
-                icon: const Icon(Icons.close),
-              )
-            : null,
-        actions: [
-          if (!_selectionMode)
-            IconButton(onPressed: _openSearch, icon: const Icon(Icons.search)),
-          if (!_selectionMode)
-            IconButton(
-              onPressed: _openFilters,
-              icon: const Icon(Icons.filter_list),
-            ),
-          if (_selectionMode)
-            IconButton(
-              onPressed: allSelected ? _clearSelection : _selectAll,
-              icon: const Icon(Icons.select_all),
-            ),
-          if (_selectionMode)
-            IconButton(
-              onPressed: _deleteSelected,
-              icon: const Icon(Icons.delete),
-            ),
-          if (!_selectionMode)
-            TextButton(
-              onPressed: () async {
-                await _auth.signOut();
-              },
-              child: const Text('Logout'),
-            ),
-        ],
-      ),
+      appBar: _buildAppBar(),
       floatingActionButton: FloatingActionButton(
         onPressed: _openAddPatient,
         child: const Icon(Icons.person_add),
@@ -235,107 +414,83 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ? const Center(child: CircularProgressIndicator())
             : Padding(
                 padding: const EdgeInsets.all(16),
-                child: _patients.isEmpty
-                    ? const Center(child: Text('No patients found'))
-                    : ListView.separated(
-                        itemCount: _patients.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final p = _patients[index];
-                          final selected = _selectedIds.contains(p.id);
+                child: Column(
+                  children: [
+                    _buildTopChips(),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: _patients.isEmpty
+                          ? const Center(child: Text('No patients found'))
+                          : ListView.separated(
+                              itemCount: _patients.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final p = _patients[index];
+                                final selected = _selectedIds.contains(p.id);
 
-                          return InkWell(
-                            onLongPress: () => _toggleSelect(p.id),
-                            onTap: () {
-                              if (_selectionMode) {
-                                _toggleSelect(p.id);
-                              } else {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        PatientDetailScreen(patient: p),
+                                return InkWell(
+                                  onLongPress: () => _toggleSelect(p.id),
+                                  onTap: () {
+                                    if (_selectionMode) {
+                                      _toggleSelect(p.id);
+                                    } else {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              PatientDetailScreen(patient: p),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: Card(
+                                    child: ListTile(
+                                      leading: _selectionMode
+                                          ? Icon(
+                                              selected
+                                                  ? Icons.check_circle
+                                                  : Icons
+                                                        .radio_button_unchecked,
+                                            )
+                                          : const Icon(Icons.person),
+                                      title: Text(p.name),
+                                      subtitle: Text(
+                                        'Category: ${p.category} • Age: ${p.age} • Blood: ${p.bloodGroup} • BP: ${p.bp}\nDisease: ${p.disease}',
+                                      ),
+                                      trailing: _selectionMode && selected
+                                          ? IconButton(
+                                              onPressed: () => _deleteOne(p.id),
+                                              icon: const Icon(Icons.delete),
+                                            )
+                                          : null,
+                                    ),
                                   ),
                                 );
-                              }
-                            },
-                            child: Card(
-                              child: ListTile(
-                                leading: _selectionMode
-                                    ? Icon(
-                                        selected
-                                            ? Icons.check_circle
-                                            : Icons.radio_button_unchecked,
-                                      )
-                                    : const Icon(Icons.person),
-                                title: Text(p.name),
-                                subtitle: Text(
-                                  'Category: ${p.category} • Age: ${p.age} • Blood: ${p.bloodGroup} • BP: ${p.bp}\nDisease: ${p.disease}',
-                                ),
-                                trailing: _selectionMode && selected
-                                    ? IconButton(
-                                        onPressed: () => _deleteOne(p.id),
-                                        icon: const Icon(Icons.delete),
-                                      )
-                                    : null,
-                              ),
+                              },
                             ),
-                          );
-                        },
-                      ),
+                    ),
+                  ],
+                ),
               ),
       ),
     );
   }
 }
 
-class PatientSearchDelegate extends SearchDelegate<String?> {
-  final String initial;
-
-  PatientSearchDelegate({required this.initial}) {
-    query = initial;
-  }
-
-  @override
-  List<Widget>? buildActions(BuildContext context) {
-    return [
-      IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
-    ];
-  }
-
-  @override
-  Widget? buildLeading(BuildContext context) {
-    return IconButton(
-      icon: const Icon(Icons.arrow_back),
-      onPressed: () => close(context, null),
-    );
-  }
-
-  @override
-  Widget buildResults(BuildContext context) {
-    close(context, query.trim());
-    return const SizedBox.shrink();
-  }
-
-  @override
-  Widget buildSuggestions(BuildContext context) {
-    return const SizedBox.shrink();
-  }
-}
-
 class _FilterResult {
   final String? category;
-  final int? month;
+  final DateTimeRange? range;
 
-  const _FilterResult({required this.category, required this.month});
+  const _FilterResult({required this.category, required this.range});
 }
 
 class _FilterSheet extends StatefulWidget {
   final String? selectedCategory;
-  final int? selectedMonth;
+  final DateTimeRange? selectedRange;
 
   const _FilterSheet({
     required this.selectedCategory,
-    required this.selectedMonth,
+    required this.selectedRange,
   });
 
   @override
@@ -344,22 +499,64 @@ class _FilterSheet extends StatefulWidget {
 
 class _FilterSheetState extends State<_FilterSheet> {
   String? _category;
-  int? _month;
+  DateTimeRange? _range;
 
-  static const _categories = <String>['Dermatology', 'OPD'];
+  static const _categories = <String>['OPD', 'Dermatology'];
 
   @override
   void initState() {
     super.initState();
     _category = widget.selectedCategory;
-    _month = widget.selectedMonth;
+    _range = widget.selectedRange;
+  }
+
+  String _fmtDate(DateTime d) {
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+
+  String _rangeLabel() {
+    final r = _range;
+    if (r == null) return 'Any date';
+    return '${_fmtDate(r.start)} → ${_fmtDate(r.end)}';
+  }
+
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final initial =
+        _range ??
+        DateTimeRange(
+          start: DateTime(now.year, now.month, now.day),
+          end: DateTime(now.year, now.month, now.day),
+        );
+
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000, 1, 1),
+      lastDate: DateTime(2100, 12, 31),
+      initialDateRange: initial,
+    );
+
+    if (!mounted) return;
+    if (picked == null) return;
+
+    setState(() {
+      _range = picked;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          16,
+          16,
+          16 + MediaQuery.of(context).viewInsets.bottom,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -389,18 +586,19 @@ class _FilterSheetState extends State<_FilterSheet> {
               ),
             ),
             const SizedBox(height: 12),
-            DropdownButtonFormField<int>(
-              value: _month,
-              items: [
-                const DropdownMenuItem(value: null, child: Text('All Months')),
-                ...List.generate(12, (i) => i + 1).map(
-                  (m) => DropdownMenuItem(value: m, child: Text('Month $m')),
+            InkWell(
+              onTap: _pickRange,
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  labelText: 'Date range',
                 ),
-              ],
-              onChanged: (v) => setState(() => _month = v),
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Month',
+                child: Row(
+                  children: [
+                    Expanded(child: Text(_rangeLabel())),
+                    const Icon(Icons.calendar_today, size: 18),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -411,7 +609,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                     onPressed: () {
                       Navigator.of(
                         context,
-                      ).pop(const _FilterResult(category: null, month: null));
+                      ).pop(const _FilterResult(category: null, range: null));
                     },
                     child: const Text('Clear'),
                   ),
@@ -422,7 +620,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                     onPressed: () {
                       Navigator.of(
                         context,
-                      ).pop(_FilterResult(category: _category, month: _month));
+                      ).pop(_FilterResult(category: _category, range: _range));
                     },
                     child: const Text('Apply'),
                   ),
