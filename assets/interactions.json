@@ -1,0 +1,217 @@
+{
+  "version": 2,
+  "rules": [
+    {
+      "a": "warfarin",
+      "b": "clarithromycin",
+      "severity": "major",
+      "cause": "CYP3A4 inhibition increases warfarin levels.",
+      "effect": "Elevated INR, bleeding risk.",
+      "advice": "Avoid if possible; monitor INR closely; consider alternative antibiotic."
+    },
+    {
+      "a": "warfarin",
+      "b": "ciprofloxacin",
+      "severity": "major",
+      "cause": "CYP inhibition and gut flora suppression increase INR.",
+      "effect": "Increased bleeding risk.",
+      "advice": "Monitor INR closely during and after therapy."
+    },
+    {
+      "a": "warfarin",
+      "b": "amiodarone",
+      "severity": "major",
+      "cause": "Amiodarone inhibits warfarin metabolism.",
+      "effect": "Significant INR elevation.",
+      "advice": "Reduce warfarin dose and monitor INR frequently."
+    },
+    {
+      "a": "warfarin",
+      "b": "trimethoprim-sulfamethoxazole",
+      "severity": "major",
+      "cause": "CYP2C9 inhibition increases warfarin effect.",
+      "effect": "Marked INR increase and bleeding.",
+      "advice": "Avoid if possible; if used, reduce warfarin and monitor INR."
+    },
+    {
+      "a": "apixaban",
+      "b": "clarithromycin",
+      "severity": "major",
+      "cause": "Strong CYP3A4/P-gp inhibition increases apixaban levels.",
+      "effect": "Bleeding risk increased.",
+      "advice": "Avoid combination or adjust dose per guidelines."
+    },
+    {
+      "a": "clopidogrel",
+      "b": "omeprazole",
+      "severity": "moderate",
+      "cause": "CYP2C19 inhibition reduces clopidogrel activation.",
+      "effect": "Reduced antiplatelet effect.",
+      "advice": "Prefer pantoprazole instead."
+    },
+    {
+      "a": "aspirin",
+      "b": "warfarin",
+      "severity": "major",
+      "cause": "Dual anticoagulant/antiplatelet effect.",
+      "effect": "High bleeding risk.",
+      "advice": "Use only if strongly indicated; monitor closely."
+    },
+
+
+    {
+      "a": "digoxin",
+      "b": "amiodarone",
+      "severity": "major",
+      "cause": "P-gp inhibition increases digoxin levels.",
+      "effect": "Digoxin toxicity (arrhythmia, nausea, vision changes).",
+      "advice": "Reduce digoxin dose; monitor levels."
+    },
+    {
+      "a": "digoxin",
+      "b": "verapamil",
+      "severity": "major",
+      "cause": "Reduced renal clearance of digoxin.",
+      "effect": "Digoxin toxicity risk.",
+      "advice": "Monitor digoxin levels and symptoms."
+    },
+    {
+      "a": "lisinopril",
+      "b": "spironolactone",
+      "severity": "major",
+      "cause": "Both increase potassium levels.",
+      "effect": "Hyperkalemia, arrhythmia risk.",
+      "advice": "Monitor potassium and renal function."
+    },
+    {
+      "a": "losartan",
+      "b": "potassium supplements",
+      "severity": "major",
+      "cause": "Additive potassium retention.",
+      "effect": "Hyperkalemia.",
+      "advice": "Avoid routine combination; monitor potassium."
+    },
+    {
+      "a": "metformin",
+      "b": "cimetidine",
+      "severity": "moderate",
+      "cause": "Reduced renal clearance of metformin.",
+      "effect": "Increased lactic acidosis risk.",
+      "advice": "Avoid if possible; monitor renal function."
+    },
+    {
+      "a": "insulin",
+      "b": "propranolol",
+      "severity": "moderate",
+      "cause": "Beta-blockers mask hypoglycemia symptoms.",
+      "effect": "Unrecognized hypoglycemia.",
+      "advice": "Use cardioselective beta-blocker if needed."
+    },
+    {
+      "a": "glibenclamide",
+      "b": "fluconazole",
+      "severity": "major",
+      "cause": "CYP2C9 inhibition increases sulfonylurea levels.",
+      "effect": "Severe hypoglycemia.",
+      "advice": "Monitor glucose closely; reduce dose."
+    },
+    {
+      "a": "sertraline",
+      "b": "tramadol",
+      "severity": "major",
+      "cause": "Both increase serotonin levels.",
+      "effect": "Serotonin syndrome.",
+      "advice": "Avoid combination or monitor for toxicity."
+    },
+    {
+      "a": "fluoxetine",
+      "b": "amitriptyline",
+      "severity": "major",
+      "cause": "CYP2D6 inhibition increases TCA levels.",
+      "effect": "TCA toxicity.",
+      "advice": "Use lower TCA dose and monitor."
+    },
+    {
+      "a": "lithium",
+      "b": "ibuprofen",
+      "severity": "major",
+      "cause": "NSAIDs reduce lithium clearance.",
+      "effect": "Lithium toxicity.",
+      "advice": "Avoid NSAIDs; monitor lithium levels."
+    },
+
+    {
+      "a": "theophylline",
+      "b": "ciprofloxacin",
+      "severity": "major",
+      "cause": "CYP1A2 inhibition increases theophylline levels.",
+      "effect": "Seizures, arrhythmias.",
+      "advice": "Avoid combination."
+    },
+    {
+      "a": "azithromycin",
+      "b": "ondansetron",
+      "severity": "major",
+      "cause": "Additive QT prolongation.",
+      "effect": "Torsades de pointes risk.",
+      "advice": "Avoid in high-risk patients; monitor ECG."
+    },
+    {
+      "a": "haloperidol",
+      "b": "ciprofloxacin",
+      "severity": "major",
+      "cause": "Additive QT prolongation.",
+      "effect": "Serious arrhythmia risk.",
+      "advice": "Monitor ECG or avoid combination."
+    },
+    {
+      "a": "doxycycline",
+      "b": "calcium supplements",
+      "severity": "moderate",
+      "cause": "Chelation reduces absorption.",
+      "effect": "Reduced antibiotic efficacy.",
+      "advice": "Separate by 2–4 hours."
+    },
+    {
+      "a": "rifampicin",
+      "b": "oral contraceptives",
+      "severity": "major",
+      "cause": "CYP induction reduces hormone levels.",
+      "effect": "Contraceptive failure.",
+      "advice": "Use alternative contraception."
+    },
+    {
+      "a": "metoclopramide",
+      "b": "antipsychotics",
+      "severity": "moderate",
+      "cause": "Additive dopamine blockade.",
+      "effect": "Extrapyramidal symptoms.",
+      "advice": "Avoid routine combination."
+    },
+    {
+      "a": "prednisone",
+      "b": "insulin",
+      "severity": "moderate",
+      "cause": "Steroids increase glucose levels.",
+      "effect": "Hyperglycemia.",
+      "advice": "Adjust insulin dose as needed."
+    },
+    {
+      "a": "diazepam",
+      "b": "morphine",
+      "severity": "major",
+      "cause": "Additive CNS depression.",
+      "effect": "Respiratory depression.",
+      "advice": "Avoid or use minimal doses with monitoring."
+    },
+    {
+      "a": "alprazolam",
+      "b": "alcohol",
+      "severity": "major",
+      "cause": "Synergistic CNS depression.",
+      "effect": "Severe sedation, respiratory depression.",
+      "advice": "Avoid alcohol."
+    }
+
+  ]
+}

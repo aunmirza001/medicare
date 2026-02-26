@@ -9,6 +9,7 @@ import '../database/app_database.dart';
 import '../models/patient.dart';
 import '../models/patient_record.dart';
 import '../models/record_attachment.dart';
+import 'prescription_editor_screen.dart';
 
 class PatientDetailScreen extends StatefulWidget {
   final Patient patient;
@@ -353,6 +354,22 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
     );
   }
 
+  Future<void> _openPrescriptionEditor() async {
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PrescriptionEditorScreen(
+          patient: widget.patient,
+          initialBp: _bpController.text.trim(),
+          initialCondition: _conditionController.text.trim(),
+        ),
+      ),
+    );
+
+    if (ok == true) {
+      await _load();
+    }
+  }
+
   Widget _newRecordComposer() {
     return Card(
       child: Padding(
@@ -385,15 +402,16 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: _rxController,
-              keyboardType: TextInputType.multiline,
+              readOnly: true,
               minLines: 4,
               maxLines: 8,
               decoration: const InputDecoration(
-                labelText: 'Prescription / Notes',
+                labelText: 'Prescription / Notes (Tap to open editor)',
                 border: OutlineInputBorder(),
                 alignLabelWithHint: true,
                 prefixIcon: Icon(Icons.edit_note_outlined),
               ),
+              onTap: _openPrescriptionEditor,
             ),
             const SizedBox(height: 12),
             Row(
@@ -782,20 +800,17 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
                                           ? null
                                           : () async {
                                               ss(() => saving = true);
-
                                               final ff = File(a.filePath);
                                               if (await ff.exists()) {
                                                 await ff.delete().catchError(
                                                   (_) {},
                                                 );
                                               }
-
                                               await db.delete(
                                                 'record_attachments',
                                                 where: 'id = ?',
                                                 whereArgs: [a.id],
                                               );
-
                                               ss(() {
                                                 currentAtt.removeAt(i);
                                                 saving = false;
@@ -838,13 +853,11 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
                                     child: InkWell(
                                       onTap: saving
                                           ? null
-                                          : () {
-                                              ss(
-                                                () => picked.removeAt(
-                                                  i - currentAtt.length,
-                                                ),
-                                              );
-                                            },
+                                          : () => ss(
+                                              () => picked.removeAt(
+                                                i - currentAtt.length,
+                                              ),
+                                            ),
                                       child: Container(
                                         padding: const EdgeInsets.all(6),
                                         decoration: BoxDecoration(
@@ -875,9 +888,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
                           child: OutlinedButton(
                             onPressed: saving
                                 ? null
-                                : () async {
-                                    Navigator.of(ctx).pop();
-                                  },
+                                : () => Navigator.of(ctx).pop(),
                             child: const Text('Cancel'),
                           ),
                         ),
@@ -908,9 +919,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
                                       });
                                     }
 
-                                    if (mounted) {
-                                      Navigator.of(ctx).pop();
-                                    }
+                                    if (mounted) Navigator.of(ctx).pop();
                                   },
                             child: saving
                                 ? const SizedBox(
