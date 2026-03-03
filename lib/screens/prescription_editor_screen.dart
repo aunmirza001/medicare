@@ -16,12 +16,7 @@ class MedicineEntry {
   final String rxcui;
   final String name;
 
-  /// For display/debug (may be empty for local candidates)
-  String ingredientRaw;
-
-  /// Normalized ingredient list used for interaction matching
   List<String> ingredients;
-
   String strength;
   String dose;
   String frequency;
@@ -31,7 +26,6 @@ class MedicineEntry {
   MedicineEntry({
     required this.rxcui,
     required this.name,
-    required this.ingredientRaw,
     required this.ingredients,
     this.strength = '',
     this.dose = '1-0-1',
@@ -67,16 +61,21 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
 
   final _searchC = TextEditingController();
   Timer? _debounce;
+
   bool _searching = false;
+  bool _interactionLoading = false;
+
   List<RxCandidate> _suggestions = const [];
 
   final List<MedicineEntry> _stagedMeds = [];
   final List<MedicineEntry> _confirmedMeds = [];
+
   final List<File> _pickedFiles = [];
 
   bool _saving = false;
   bool _rulesLoaded = false;
 
+  bool _interactionsComputed = false;
   List<InteractionAlert> _alerts = const [];
   final Set<String> _ackMajorKeys = {};
 
@@ -88,9 +87,7 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
     '0-1-0',
     '1/2-0-1/2',
   ];
-
   static const _freqOptions = <String>['OD', 'BD', 'TDS', 'QID', 'HS', 'PRN'];
-
   static const _durationOptions = <String>[
     '3 days',
     '5 days',
@@ -99,7 +96,6 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
     '2 weeks',
     '1 month',
   ];
-
   static const _instrOptions = <String>[
     'After food',
     'Before food',
@@ -113,6 +109,7 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
     super.initState();
     _bpC.text = widget.initialBp;
     _condC.text = widget.initialCondition;
+
     _searchC.addListener(_onSearchChanged);
     _initRules();
   }
@@ -126,30 +123,49 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+
     _bpC.dispose();
     _condC.dispose();
     _freeTextC.dispose();
+
     _searchC.removeListener(_onSearchChanged);
     _searchC.dispose();
+
     super.dispose();
   }
 
   void _onSearchChanged() {
+    // Rebuild for suffixIcon (clear/spinner) immediately.
+    if (mounted) setState(() {});
+
     _debounce?.cancel();
     final q = _searchC.text.trim();
+
     _debounce = Timer(const Duration(milliseconds: 250), () async {
       if (!mounted) return;
+
       if (q.isEmpty) {
-        setState(() => _suggestions = const []);
+        setState(() {
+          _suggestions = const [];
+          _searching = false;
+        });
         return;
       }
+
       setState(() => _searching = true);
-      final res = await _rxnorm.search(q, maxEntries: 250);
-      if (!mounted) return;
-      setState(() {
-        _suggestions = res;
-        _searching = false;
-      });
+
+      try {
+        // Keep this high to show lots of prefix matches (RxNorm side permitting).
+        final res = await _rxnorm.search(q, maxEntries: 250);
+        if (!mounted) return;
+        setState(() {
+          _suggestions = res;
+          _searching = false;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _searching = false);
+      }
     });
   }
 
@@ -168,10 +184,6 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
       ),
     );
   }
-
-  // -------------------------
-  // Attachments
-  // -------------------------
 
   Future<File> _persistPickedImage(XFile xf) async {
     final dir = await getApplicationDocumentsDirectory();
@@ -233,59 +245,57 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
 
   void _removePickedAt(int i) => setState(() => _pickedFiles.removeAt(i));
 
-  // -------------------------
-  // Staging medicines
-  // -------------------------
+  bool _alreadyAdded(String rxcui) {
+    return _stagedMeds.any((m) => m.rxcui == rxcui) ||
+        _confirmedMeds.any((m) => m.rxcui == rxcui);
+  }
 
   Future<void> _stageMedicine(RxCandidate c) async {
-    if (_stagedMeds.any((m) => m.rxcui == c.rxcui) ||
-        _confirmedMeds.any((m) => m.rxcui == c.rxcui)) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Medicine already added.')));
+    if (_alreadyAdded(c.rxcui)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Medicine already added.')),
+      );
       return;
     }
 
     List<String> ingredients = const [];
-    String raw = '';
-
-    if (c.isLocal) {
-      ingredients = c.ingredientsHint;
-      raw = c.ingredientsHint.join(', ');
-    } else {
-      ingredients = await _rxnorm.ingredientsFor(c.rxcui);
-      raw = ingredients.join(', ');
+    try {
+      if (c.isLocal) {
+        ingredients = c.ingredientsHint;
+      } else {
+        ingredients = await _rxnorm.ingredientsFor(c.rxcui);
+      }
+    } catch (_) {
+      ingredients = const [];
     }
 
     if (!mounted) return;
 
     setState(() {
       _stagedMeds.add(
-        MedicineEntry(
-          rxcui: c.rxcui,
-          name: c.name,
-          ingredientRaw: raw,
-          ingredients: ingredients,
-        ),
+        MedicineEntry(rxcui: c.rxcui, name: c.name, ingredients: ingredients),
       );
       _searchC.clear();
       _suggestions = const [];
+      _interactionsComputed = false;
+      _alerts = const [];
+      _ackMajorKeys.clear();
     });
   }
 
   void _removeStagedAt(int i) {
-    setState(() => _stagedMeds.removeAt(i));
-    _recomputeAlertsForStaged();
+    setState(() {
+      _stagedMeds.removeAt(i);
+      _interactionsComputed = false;
+      _alerts = const [];
+      _ackMajorKeys.clear();
+    });
   }
 
   void _removeConfirmedAt(int i) {
     setState(() => _confirmedMeds.removeAt(i));
     _syncConfirmedToPrescriptionText();
   }
-
-  // -------------------------
-  // Duplicate ingredients
-  // -------------------------
 
   List<String> _duplicateIngredientWarnings(List<MedicineEntry> meds) {
     final seen = <String, int>{};
@@ -308,52 +318,68 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
     return warnings;
   }
 
-  // -------------------------
-  // Interactions
-  // -------------------------
-
-  void _recomputeAlertsForStaged() {
+  Future<void> _computeInteractions() async {
     if (!_rulesLoaded) return;
+    if (_interactionLoading) return;
+
+    setState(() {
+      _interactionLoading = true;
+      _interactionsComputed = false;
+    });
+
+    await Future<void>.delayed(const Duration(milliseconds: 10));
 
     final ingredients = _stagedMeds
         .expand((m) => m.ingredients)
-        .map((x) => x.toLowerCase())
+        .map((x) => x.toLowerCase().trim())
+        .where((x) => x.isNotEmpty)
         .toList();
 
     final alerts = LocalInteractionsProvider.instance.checkByIngredients(
       ingredients,
     );
 
+    if (!mounted) return;
+
     final majorKeys = alerts
-        .where((a) => a.severity == 'major')
+        .where((a) => a.severity.toLowerCase() == 'major')
         .map((a) => a.key)
         .toSet();
     _ackMajorKeys.removeWhere((k) => !majorKeys.contains(k));
 
-    setState(() => _alerts = alerts);
+    setState(() {
+      _alerts = alerts;
+      _interactionsComputed = true;
+      _interactionLoading = false;
+    });
+
+    if (_stagedMeds.isNotEmpty && ingredients.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ingredients not found for selected medicines. Use Local matches or improve ingredient mapping.',
+          ),
+        ),
+      );
+    }
   }
 
   bool get _hasUnackMajor {
     final majors = _alerts
-        .where((a) => a.severity == 'major')
+        .where((a) => a.severity.toLowerCase() == 'major')
         .map((a) => a.key)
         .toSet();
     if (majors.isEmpty) return false;
     return majors.any((k) => !_ackMajorKeys.contains(k));
   }
 
-  // -------------------------
-  // Confirm staged -> prescription
-  // -------------------------
-
   void _confirmAndAddToPrescription() {
     if (_stagedMeds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No staged medicines to add.')),
+        const SnackBar(content: Text('No staged medicines to confirm.')),
       );
       return;
     }
-
     if (_hasUnackMajor) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Acknowledge major interactions first.')),
@@ -366,6 +392,7 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
       _stagedMeds.clear();
       _alerts = const [];
       _ackMajorKeys.clear();
+      _interactionsComputed = false;
     });
 
     _syncConfirmedToPrescriptionText();
@@ -400,8 +427,7 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
 
     final lines = t.split('\n');
     var i = 0;
-
-    if (i < lines.length) i++; // skip Medicines:
+    if (i < lines.length) i++; // skip "Medicines:"
     while (i < lines.length) {
       final ln = lines[i].trimLeft();
       if (ln.startsWith('- ')) {
@@ -411,20 +437,15 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
       break;
     }
     while (i < lines.length && lines[i].trim().isEmpty) i++;
-
     return lines.sublist(i).join('\n');
   }
-
-  // -------------------------
-  // Save record
-  // -------------------------
 
   Future<void> _saveRecord() async {
     if (_saving) return;
 
     if (_stagedMeds.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please confirm staged medicines first.')),
+        const SnackBar(content: Text('Confirm staged medicines before saving.')),
       );
       return;
     }
@@ -491,6 +512,96 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
     return 'Minor';
   }
 
+  Widget _doseGrid({
+    required MedicineEntry m,
+    required double maxWidth,
+  }) {
+    // FIX for overflow: use 2-column responsive grid (instead of 4 fixed 170px).
+    const gap = 10.0;
+    final colWidth = (maxWidth - gap) / 2;
+
+    Widget field(Widget child) => SizedBox(width: colWidth, child: child);
+
+    return Wrap(
+      spacing: gap,
+      runSpacing: gap,
+      children: [
+        field(
+          DropdownButtonFormField<String>(
+            value: m.dose,
+            isExpanded: true,
+            items: _doseOptions
+                .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+                .toList(),
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() => m.dose = v);
+            },
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Dose',
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+          ),
+        ),
+        field(
+          DropdownButtonFormField<String>(
+            value: m.frequency,
+            isExpanded: true,
+            items: _freqOptions
+                .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+                .toList(),
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() => m.frequency = v);
+            },
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Frequency',
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+          ),
+        ),
+        field(
+          DropdownButtonFormField<String>(
+            value: m.duration,
+            isExpanded: true,
+            items: _durationOptions
+                .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+                .toList(),
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() => m.duration = v);
+            },
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Duration',
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+          ),
+        ),
+        field(
+          DropdownButtonFormField<String>(
+            value: m.instructions,
+            isExpanded: true,
+            items: _instrOptions
+                .map((x) => DropdownMenuItem(value: x, child: Text(x)))
+                .toList(),
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() => m.instructions = v);
+            },
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Instructions',
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final p0 = widget.patient;
@@ -526,10 +637,8 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                     _chip('Name: ${p0.name}', Icons.person_outline),
                     _chip('Age: ${p0.age}', Icons.cake_outlined),
                     _chip('Blood: ${p0.bloodGroup}', Icons.bloodtype_outlined),
-                    _chip(
-                      'Category: ${p0.category}',
-                      Icons.local_hospital_outlined,
-                    ),
+                    _chip('Category: ${p0.category}',
+                        Icons.local_hospital_outlined),
                     _chip(
                       'BP: ${_bpC.text.trim().isEmpty ? '-' : _bpC.text.trim()}',
                       Icons.monitor_heart_outlined,
@@ -544,7 +653,6 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
             ),
             const SizedBox(height: 12),
 
-            // BP + Condition
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -557,7 +665,6 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                         labelText: 'BP',
                         prefixIcon: Icon(Icons.monitor_heart_outlined),
                       ),
-                      onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -567,16 +674,13 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                         labelText: 'Condition',
                         prefixIcon: Icon(Icons.medical_information_outlined),
                       ),
-                      onChanged: (_) => setState(() {}),
                     ),
                   ],
                 ),
               ),
             ),
-
             const SizedBox(height: 12),
 
-            // Medicine Search + staged + interactions
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -585,18 +689,17 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                   children: [
                     const Text(
                       'Medicine Search (RxNorm)',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                      ),
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: 12),
+
                     TextField(
                       controller: _searchC,
                       decoration: InputDecoration(
                         border: const OutlineInputBorder(),
                         prefixIcon: const Icon(Icons.search),
-                        labelText: 'Search medicine (e.g., tryptanol, brufen)',
+                        labelText: 'Search medicine (e.g., panadol, tryptanol)',
                         suffixIcon: _searching
                             ? const Padding(
                                 padding: EdgeInsets.all(12),
@@ -609,25 +712,24 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                                 ),
                               )
                             : (_searchC.text.trim().isEmpty
-                                  ? null
-                                  : IconButton(
-                                      onPressed: () {
-                                        _searchC.clear();
-                                        setState(() => _suggestions = const []);
-                                      },
-                                      icon: const Icon(Icons.clear),
-                                    )),
+                                ? null
+                                : IconButton(
+                                    onPressed: () {
+                                      _searchC.clear();
+                                      setState(() => _suggestions = const []);
+                                    },
+                                    icon: const Icon(Icons.clear),
+                                  )),
                       ),
                     ),
 
                     if (_suggestions.isNotEmpty) ...[
                       const SizedBox(height: 10),
                       Container(
-                        constraints: const BoxConstraints(maxHeight: 300),
+                        constraints: const BoxConstraints(maxHeight: 320),
                         decoration: BoxDecoration(
-                          border: Border.all(
-                            color: Theme.of(context).dividerColor,
-                          ),
+                          border:
+                              Border.all(color: Theme.of(context).dividerColor),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: ListView.separated(
@@ -654,25 +756,35 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                     ],
 
                     const SizedBox(height: 14),
+
                     Row(
                       children: [
                         const Expanded(
                           child: Text(
-                            'Staged Medicines (not yet in prescription)',
+                            'Staged Medicines',
                             style: TextStyle(fontWeight: FontWeight.w800),
                           ),
                         ),
                         OutlinedButton.icon(
-                          onPressed: _stagedMeds.isEmpty
+                          onPressed: (_stagedMeds.isEmpty || !_rulesLoaded)
                               ? null
-                              : () {
-                                  _recomputeAlertsForStaged();
-                                },
-                          icon: const Icon(Icons.sync),
-                          label: const Text('Sync meds'),
+                              : _computeInteractions,
+                          icon: _interactionLoading
+                              ? const SizedBox(
+                                  height: 16,
+                                  width: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.rule),
+                          label: Text(
+                            _interactionLoading
+                                ? 'Checking...'
+                                : 'Show interactions',
+                          ),
                         ),
                       ],
                     ),
+
                     const SizedBox(height: 10),
 
                     if (_stagedMeds.isEmpty)
@@ -692,9 +804,8 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              border: Border.all(
-                                color: Theme.of(context).dividerColor,
-                              ),
+                              border:
+                                  Border.all(color: Theme.of(context).dividerColor),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Column(
@@ -722,132 +833,32 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                                 Text(
                                   'Ingredients: ${m.ingredients.isEmpty ? '(unknown)' : m.ingredients.join(', ')}',
                                   style: TextStyle(
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
                                   ),
                                 ),
                                 const SizedBox(height: 10),
 
-                                TextField(
+                                TextFormField(
+                                  key: ValueKey('strength_${m.rxcui}'),
+                                  initialValue: m.strength,
                                   onChanged: (v) => m.strength = v,
                                   decoration: const InputDecoration(
                                     border: OutlineInputBorder(),
                                     labelText: 'Strength (optional)',
                                   ),
                                 ),
+
                                 const SizedBox(height: 10),
-                                Wrap(
-                                  spacing: 10,
-                                  runSpacing: 10,
-                                  children: [
-                                    SizedBox(
-                                      width: 170,
-                                      child: DropdownButtonFormField<String>(
-                                        value: m.dose,
-                                        isExpanded: true,
-                                        items: _doseOptions
-                                            .map(
-                                              (x) => DropdownMenuItem(
-                                                value: x,
-                                                child: Text(x),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (v) => v == null
-                                            ? null
-                                            : setState(() => m.dose = v),
-                                        decoration: const InputDecoration(
-                                          border: OutlineInputBorder(),
-                                          labelText: 'Dose',
-                                          contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 12,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 170,
-                                      child: DropdownButtonFormField<String>(
-                                        value: m.frequency,
-                                        isExpanded: true,
-                                        items: _freqOptions
-                                            .map(
-                                              (x) => DropdownMenuItem(
-                                                value: x,
-                                                child: Text(x),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (v) => v == null
-                                            ? null
-                                            : setState(() => m.frequency = v),
-                                        decoration: const InputDecoration(
-                                          border: OutlineInputBorder(),
-                                          labelText: 'Frequency',
-                                          contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 12,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 170,
-                                      child: DropdownButtonFormField<String>(
-                                        value: m.duration,
-                                        isExpanded: true,
-                                        items: _durationOptions
-                                            .map(
-                                              (x) => DropdownMenuItem(
-                                                value: x,
-                                                child: Text(x),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (v) => v == null
-                                            ? null
-                                            : setState(() => m.duration = v),
-                                        decoration: const InputDecoration(
-                                          border: OutlineInputBorder(),
-                                          labelText: 'Duration',
-                                          contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 12,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 170,
-                                      child: DropdownButtonFormField<String>(
-                                        value: m.instructions,
-                                        isExpanded: true,
-                                        items: _instrOptions
-                                            .map(
-                                              (x) => DropdownMenuItem(
-                                                value: x,
-                                                child: Text(x),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (v) => v == null
-                                            ? null
-                                            : setState(
-                                                () => m.instructions = v,
-                                              ),
-                                        decoration: const InputDecoration(
-                                          border: OutlineInputBorder(),
-                                          labelText: 'Instructions',
-                                          contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 12,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    return _doseGrid(
+                                      m: m,
+                                      maxWidth: constraints.maxWidth,
+                                    );
+                                  },
                                 ),
                               ],
                             ),
@@ -855,37 +866,50 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                         );
                       }),
 
-                    if (stagedDupWarnings.isNotEmpty || _alerts.isNotEmpty) ...[
+                    if (_interactionsComputed) ...[
                       const SizedBox(height: 12),
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Theme.of(context).dividerColor,
-                          ),
+                          border:
+                              Border.all(color: Theme.of(context).dividerColor),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Interactions / Safety (Staged)',
+                              'Interactions / Safety',
                               style: TextStyle(fontWeight: FontWeight.w800),
                             ),
                             const SizedBox(height: 8),
+
                             if (stagedDupWarnings.isNotEmpty)
                               ...stagedDupWarnings.map((w) => Text('• $w')),
-                            if (_alerts.isNotEmpty) ...[
+
+                            if (stagedDupWarnings.isNotEmpty &&
+                                _alerts.isNotEmpty)
                               const SizedBox(height: 10),
+
+                            if (_alerts.isEmpty)
+                              Text(
+                                'No interactions found in local JSON rules for these ingredients.',
+                                style: TextStyle(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                              )
+                            else
                               ..._alerts.map((a) {
-                                final isMajor = a.severity == 'major';
-                                final acknowledged = _ackMajorKeys.contains(
-                                  a.key,
-                                );
+                                final sev = a.severity.toLowerCase();
+                                final isMajor = sev == 'major';
+                                final acknowledged =
+                                    _ackMajorKeys.contains(a.key);
 
                                 return Padding(
-                                  padding: const EdgeInsets.only(bottom: 10),
+                                  padding: const EdgeInsets.only(top: 10),
                                   child: Container(
                                     padding: const EdgeInsets.all(12),
                                     decoration: BoxDecoration(
@@ -895,8 +919,7 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                                       ),
                                     ),
                                     child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
@@ -909,15 +932,13 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                                               ),
                                             ),
                                             Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 10,
-                                                    vertical: 6,
-                                                  ),
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 10,
+                                                vertical: 6,
+                                              ),
                                               decoration: BoxDecoration(
-                                                color: _sevColor(
-                                                  a.severity,
-                                                ).withOpacity(0.12),
+                                                color: _sevColor(a.severity)
+                                                    .withOpacity(0.12),
                                                 borderRadius:
                                                     BorderRadius.circular(999),
                                                 border: Border.all(
@@ -945,11 +966,8 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                                           OutlinedButton(
                                             onPressed: acknowledged
                                                 ? null
-                                                : () => setState(
-                                                    () => _ackMajorKeys.add(
-                                                      a.key,
-                                                    ),
-                                                  ),
+                                                : () => setState(() =>
+                                                    _ackMajorKeys.add(a.key)),
                                             child: Text(
                                               acknowledged
                                                   ? 'Acknowledged'
@@ -962,7 +980,6 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                                   ),
                                 );
                               }),
-                            ],
                           ],
                         ),
                       ),
@@ -970,12 +987,8 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
 
                     const SizedBox(height: 10),
                     ElevatedButton.icon(
-                      onPressed: _stagedMeds.isEmpty
-                          ? null
-                          : () {
-                              _recomputeAlertsForStaged();
-                              _confirmAndAddToPrescription();
-                            },
+                      onPressed:
+                          _stagedMeds.isEmpty ? null : _confirmAndAddToPrescription,
                       icon: const Icon(Icons.check_circle_outline),
                       label: const Text('Confirm & add to prescription'),
                     ),
@@ -983,21 +996,21 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                     if (_confirmedMeds.isNotEmpty) ...[
                       const SizedBox(height: 14),
                       const Text(
-                        'Confirmed Medicines (already in prescription)',
+                        'Confirmed Medicines',
                         style: TextStyle(fontWeight: FontWeight.w800),
                       ),
                       const SizedBox(height: 10),
                       ..._confirmedMeds.asMap().entries.map((e) {
                         final i = e.key;
                         final m = e.value;
+
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              border: Border.all(
-                                color: Theme.of(context).dividerColor,
-                              ),
+                              border:
+                                  Border.all(color: Theme.of(context).dividerColor),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Row(
@@ -1029,7 +1042,6 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
 
             const SizedBox(height: 12),
 
-            // Prescription writing
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -1038,10 +1050,8 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                   children: [
                     const Text(
                       'Prescription Writing Area',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                      ),
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -1050,8 +1060,7 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                       maxLines: 16,
                       decoration: const InputDecoration(
                         border: OutlineInputBorder(),
-                        hintText:
-                            'Write clinical notes and prescription here...',
+                        hintText: 'Write clinical notes and prescription here...',
                         alignLabelWithHint: true,
                       ),
                     ),
@@ -1108,9 +1117,7 @@ class _PrescriptionEditorScreenState extends State<PrescriptionEditorScreen> {
                                       padding: const EdgeInsets.all(6),
                                       decoration: BoxDecoration(
                                         color: Colors.black.withOpacity(0.6),
-                                        borderRadius: BorderRadius.circular(
-                                          999,
-                                        ),
+                                        borderRadius: BorderRadius.circular(999),
                                       ),
                                       child: const Icon(
                                         Icons.close,

@@ -1,6 +1,6 @@
 class InteractionRule {
-  final String a; // ingredient A (generic)
-  final String b; // ingredient B (generic)
+  final String a; // ingredient A
+  final String b; // ingredient B
   final String severity; // major | moderate | minor
   final String cause;
   final String effect;
@@ -25,26 +25,15 @@ class InteractionRule {
       advice: (j['advice'] ?? '').toString(),
     );
   }
-
-  Map<String, dynamic> toJson() => {
-    'a': a,
-    'b': b,
-    'severity': severity,
-    'cause': cause,
-    'effect': effect,
-    'advice': advice,
-  };
 }
 
 class InteractionAlert {
-  final String key; // normalized unique key: a|b (sorted)
-  final String title; // e.g. "Warfarin + Ibuprofen"
-  final String severity;
+  final String key; // normalized pair key
+  final String title; // display title
+  final String severity; // major | moderate | minor
   final String cause;
   final String effect;
   final String advice;
-
-  /// Optional debug info (helpful when rules don't match)
   final List<String> matchedIngredients;
 
   const InteractionAlert({
