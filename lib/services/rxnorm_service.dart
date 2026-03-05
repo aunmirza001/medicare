@@ -6,12 +6,10 @@ class RxCandidate {
   final String rxcui;
   final String name;
 
-  /// If true, this suggestion is locally generated (brand alias),
-  /// not from RxNorm.
+  /// If true, this suggestion is locally generated (brand alias), not from RxNorm.
   final bool isLocal;
 
-  /// For local candidates, this is already the generic ingredient.
-  /// For RxNorm candidates, this will be filled via ingredientsFor().
+  /// For local candidates, already the normalized ingredients.
   final List<String> ingredientsHint;
 
   const RxCandidate({
@@ -25,8 +23,7 @@ class RxCandidate {
 class RxnormService {
   static const _base = 'https://rxnav.nlm.nih.gov/REST';
 
-  /// Pakistan/India brand -> generic (expand this list over time)
-  /// NOTE: keys must be lowercase
+  /// Pakistan/India brand -> generic (expand over time). Keys must be lowercase.
   static const Map<String, String> _brandAlias = {
     'tryptanol': 'amitriptyline',
     'brufen': 'ibuprofen',
@@ -43,19 +40,31 @@ class RxnormService {
 
   static String _normTerm(String s) => s.trim().toLowerCase();
 
-  /// Search RxNorm approximateTerm + also provide a local brand alias suggestion if matched.
-  Future<List<RxCandidate>> search(String term, {int maxEntries = 150}) async {
+  // ✅ In-memory caches
+  final Map<String, List<RxCandidate>> _searchCache = {};
+  final Map<String, String> _nameCache = {};
+  final Map<String, List<String>> _ingredientCache = {};
+
+  /// Fast RxNorm search with caching.
+  /// - waits until term length >= 2 (you can make it 3)
+  /// - caches results per term
+  Future<List<RxCandidate>> search(String term, {int maxEntries = 80}) async {
     final t = term.trim();
     if (t.isEmpty) return const [];
+    if (t.length < 2) return const [];
+
+    final key = _normTerm(t);
+    final cached = _searchCache[key];
+    if (cached != null) return cached;
 
     final out = <RxCandidate>[];
 
-    // 1) Add local brand alias suggestion (if any)
-    final alias = _brandAlias[_normTerm(t)];
+    // 1) Local alias suggestion (exact match)
+    final alias = _brandAlias[key];
     if (alias != null && alias.trim().isNotEmpty) {
       out.add(
         RxCandidate(
-          rxcui: 'LOCAL:${_normTerm(t)}',
+          rxcui: 'LOCAL:$key',
           name: '$t (Local) → $alias',
           isLocal: true,
           ingredientsHint: _normalizeIngredients(alias),
@@ -70,66 +79,87 @@ class RxnormService {
 
     try {
       final res = await http.get(uri);
-      if (res.statusCode != 200)
-        return out; // return local suggestion if exists
+      if (res.statusCode != 200) {
+        _searchCache[key] = out;
+        return out;
+      }
 
       final data = json.decode(res.body) as Map<String, dynamic>;
       final group = (data['approximateGroup'] as Map?)?.cast<String, dynamic>();
       final cands = (group?['candidate'] as List?) ?? const [];
 
+      // Collect RxCUIs
       final ids = <String>[];
       for (final c in cands) {
         final m = (c as Map).cast<String, dynamic>();
         final id = (m['rxcui'] ?? '').toString();
-        if (id.isNotEmpty && !ids.contains(id)) ids.add(id);
+        if (id.isNotEmpty) ids.add(id);
       }
 
-      // reduce requests
-      final limited = ids.take(60).toList();
-      final names = await Future.wait(limited.map(_nameFor));
+      // Reduce calls: only take top 20, not 60
+      final limited = ids.take(20).toList();
 
-      for (var i = 0; i < limited.length; i++) {
-        final name = names[i].trim();
-        if (name.isNotEmpty) {
-          out.add(RxCandidate(rxcui: limited[i], name: name));
+      // Fetch names with caching
+      for (final id in limited) {
+        final name = await _nameForCached(id);
+        if (name.trim().isNotEmpty) {
+          out.add(RxCandidate(rxcui: id, name: name.trim()));
         }
       }
+
+      _searchCache[key] = out;
+      return out;
     } catch (_) {
-      // ignore network failures; still show local alias suggestion if present
+      _searchCache[key] = out;
       return out;
     }
-
-    return out;
   }
 
-  Future<String> _nameFor(String rxcui) async {
+  Future<String> _nameForCached(String rxcui) async {
+    final cached = _nameCache[rxcui];
+    if (cached != null) return cached;
+
     final uri = Uri.parse('$_base/rxcui/$rxcui/properties.json');
     final res = await http.get(uri);
     if (res.statusCode != 200) return '';
+
     final data = json.decode(res.body) as Map<String, dynamic>;
     final props = (data['properties'] as Map?)?.cast<String, dynamic>();
-    return (props?['name'] ?? '').toString();
+    final name = (props?['name'] ?? '').toString();
+
+    if (name.isNotEmpty) _nameCache[rxcui] = name;
+    return name;
   }
 
-  /// Returns multiple ingredient strings (normalized) for a selected RxCUI.
-  /// Tries tty=IN then PIN then MIN.
+  /// Ingredient list for a selected RxCUI (cached).
   Future<List<String>> ingredientsFor(String rxcui) async {
-    // local candidate
-    if (rxcui.startsWith('LOCAL:')) {
-      // ingredients are already embedded in suggestion, but return empty here;
-      // your UI should use candidate.ingredientsHint for local results.
-      return const [];
+    if (rxcui.startsWith('LOCAL:')) return const [];
+
+    final cached = _ingredientCache[rxcui];
+    if (cached != null) return cached;
+
+    final rawIN = await _fetchIngredientNamesByTty(rxcui, 'IN');
+    if (rawIN.isNotEmpty) {
+      final out = _normalizeMany(rawIN);
+      _ingredientCache[rxcui] = out;
+      return out;
     }
 
-    final raw = await _fetchIngredientNamesByTty(rxcui, 'IN');
-    if (raw.isNotEmpty) return _normalizeMany(raw);
+    final rawPIN = await _fetchIngredientNamesByTty(rxcui, 'PIN');
+    if (rawPIN.isNotEmpty) {
+      final out = _normalizeMany(rawPIN);
+      _ingredientCache[rxcui] = out;
+      return out;
+    }
 
-    final raw2 = await _fetchIngredientNamesByTty(rxcui, 'PIN');
-    if (raw2.isNotEmpty) return _normalizeMany(raw2);
+    final rawMIN = await _fetchIngredientNamesByTty(rxcui, 'MIN');
+    if (rawMIN.isNotEmpty) {
+      final out = _normalizeMany(rawMIN);
+      _ingredientCache[rxcui] = out;
+      return out;
+    }
 
-    final raw3 = await _fetchIngredientNamesByTty(rxcui, 'MIN');
-    if (raw3.isNotEmpty) return _normalizeMany(raw3);
-
+    _ingredientCache[rxcui] = const [];
     return const [];
   }
 
@@ -140,6 +170,7 @@ class RxnormService {
     final uri = Uri.parse(
       '$_base/rxcui/$rxcui/related.json',
     ).replace(queryParameters: {'tty': tty});
+
     final res = await http.get(uri);
     if (res.statusCode != 200) return const [];
 
@@ -160,29 +191,22 @@ class RxnormService {
     return out;
   }
 
-  /// Normalize list of raw ingredient names into a unique list
   List<String> _normalizeMany(List<String> rawNames) {
     final all = <String>{};
     for (final r in rawNames) {
       all.addAll(_normalizeIngredients(r));
     }
-    final out = all.toList();
-    out.sort();
+    final out = all.toList()..sort();
     return out;
   }
 
-  /// Very important: normalize ingredient strings for matching your local rules.
-  /// - lowercase
-  /// - remove salts (HCl/hydrochloride/etc.)
-  /// - split combos: "amoxicillin / clavulanate"
+  /// Normalize ingredient strings to match your local interaction rules.
   static List<String> _normalizeIngredients(String raw) {
     var s = raw.trim().toLowerCase();
     if (s.isEmpty) return const [];
 
-    // unify separators for combos
     s = s.replaceAll('+', '/').replaceAll('&', '/');
 
-    // split on common separators
     final parts = s
         .split(RegExp(r'[/,;]| and '))
         .map((e) => e.trim())
@@ -196,12 +220,8 @@ class RxnormService {
       return y;
     }
 
-    final cleaned = parts
-        .map(clean)
-        .where((e) => e.isNotEmpty)
-        .toSet()
-        .toList();
-    cleaned.sort();
+    final cleaned = parts.map(clean).where((e) => e.isNotEmpty).toSet().toList()
+      ..sort();
     return cleaned;
   }
 }

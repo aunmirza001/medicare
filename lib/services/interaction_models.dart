@@ -1,7 +1,8 @@
 class InteractionRule {
-  final String a; // ingredient A
-  final String b; // ingredient B
-  final String severity; // major | moderate | minor
+  final String a;
+  final String b;
+  final String severity;
+  final String mechanism; // ✅ NEW
   final String cause;
   final String effect;
   final String advice;
@@ -10,6 +11,7 @@ class InteractionRule {
     required this.a,
     required this.b,
     required this.severity,
+    required this.mechanism,
     required this.cause,
     required this.effect,
     required this.advice,
@@ -20,6 +22,7 @@ class InteractionRule {
       a: (j['a'] ?? '').toString(),
       b: (j['b'] ?? '').toString(),
       severity: (j['severity'] ?? '').toString(),
+      mechanism: (j['mechanism'] ?? '').toString(), // ✅
       cause: (j['cause'] ?? '').toString(),
       effect: (j['effect'] ?? '').toString(),
       advice: (j['advice'] ?? '').toString(),
@@ -28,9 +31,10 @@ class InteractionRule {
 }
 
 class InteractionAlert {
-  final String key; // normalized pair key
-  final String title; // display title
-  final String severity; // major | moderate | minor
+  final String key;
+  final String title;
+  final String severity;
+  final String mechanism; // ✅ NEW
   final String cause;
   final String effect;
   final String advice;
@@ -40,6 +44,7 @@ class InteractionAlert {
     required this.key,
     required this.title,
     required this.severity,
+    required this.mechanism,
     required this.cause,
     required this.effect,
     required this.advice,

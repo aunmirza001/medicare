@@ -10,11 +10,14 @@ class LocalInteractionsProvider {
   LocalInteractionsProvider._();
 
   bool _loaded = false;
+
+  /// Key = "a|b" (sorted). Value = rule
   late final Map<String, InteractionRule> _index;
 
   Future<void> load() async {
     if (_loaded) return;
 
+    // ✅ Your real path based on your screenshot
     final raw = await rootBundle.loadString('assets/interactions.json');
     final data = json.decode(raw) as Map<String, dynamic>;
     final rules = (data['rules'] as List? ?? const []);
@@ -23,9 +26,12 @@ class LocalInteractionsProvider {
 
     for (final e in rules) {
       final r = InteractionRule.fromJson((e as Map).cast<String, dynamic>());
+
       final a = _norm(r.a);
       final b = _norm(r.b);
       if (a.isEmpty || b.isEmpty) continue;
+
+      // Keep only one rule per pair
       idx[_key(a, b)] = r;
     }
 
@@ -59,6 +65,7 @@ class LocalInteractionsProvider {
             key: ruleKey,
             title: '${_cap(rule.a)} + ${_cap(rule.b)}',
             severity: _norm(rule.severity),
+            mechanism: rule.mechanism, // ✅ NEW
             cause: rule.cause,
             effect: rule.effect,
             advice: rule.advice,
@@ -68,6 +75,7 @@ class LocalInteractionsProvider {
       }
     }
 
+    // Sort: major > moderate > minor, then alphabetically
     out.sort((x, y) {
       final sx = _sevRank(x.severity);
       final sy = _sevRank(y.severity);
@@ -86,15 +94,21 @@ class LocalInteractionsProvider {
     return 0;
   }
 
+  /// Normalize ingredient to match rules:
+  /// - lowercase
+  /// - normalize separators
+  /// - strip common salts
   static String _norm(String s) {
     var x = s.trim().toLowerCase();
     if (x.isEmpty) return x;
 
     x = x.replaceAll('+', '/');
     x = x.replaceAll('&', '/');
-    x = x.replaceAll(RegExp(r'\b(hcl|hydrochloride|sodium|potassium)\b'), '');
-    x = x.replaceAll(RegExp(r'\s+'), ' ').trim();
 
+    // remove common salts/words (same as your Rxnorm normalization)
+    x = x.replaceAll(RegExp(r'\b(hcl|hydrochloride|sodium|potassium)\b'), '');
+
+    x = x.replaceAll(RegExp(r'\s+'), ' ').trim();
     return x;
   }
 

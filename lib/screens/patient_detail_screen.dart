@@ -83,6 +83,14 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
   PatientRecord? get _latestRecord =>
       _allRecords.isEmpty ? null : _allRecords.first;
 
+  /// Display number shown in UI: Record 1, Record 2, ...
+  /// (Record 1 = oldest, Record N = latest)
+  int _displayNumberFor(PatientRecord r) {
+    final idx = _allRecords.indexWhere((x) => x.id == r.id);
+    if (idx == -1) return 0;
+    return _allRecords.length - idx;
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
 
@@ -135,9 +143,12 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
     });
   }
 
+  /// Updated: allows searching "record 1" / "Record 1" (case-insensitive),
+  /// also supports record#1, record-1, extra spaces, etc.
   void _applyRecordFilters() {
     var list = List<PatientRecord>.from(_allRecords);
 
+    // Date range filter
     if (_recordDateRange != null) {
       final start = DateTime(
         _recordDateRange!.start.year,
@@ -157,17 +168,43 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
       }).toList();
     }
 
+    // Search filter (UPDATED)
     if (_recordSearchQuery.trim().isNotEmpty) {
-      final q = _recordSearchQuery.trim().toLowerCase();
+      final rawQ = _recordSearchQuery.trim();
+      final q = rawQ.toLowerCase();
+
+      String norm(String s) => s
+          .toLowerCase()
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .replaceAll(RegExp(r'[#\-_]'), ' ')
+          .trim();
+
+      final qNorm = norm(rawQ);
+
       list = list.where((r) {
         final idStr = r.id.toString();
-        final cond = r.condition.toLowerCase();
-        final rx = r.prescription.toLowerCase();
-        final dateStr = r.createdAt.toLowerCase();
-        return idStr.contains(q) ||
-            cond.contains(q) ||
-            rx.contains(q) ||
-            dateStr.contains(q);
+        final displayNumber = _displayNumberFor(r);
+
+        final aliases = <String>[
+          idStr,
+          r.condition.toLowerCase(),
+          r.prescription.toLowerCase(),
+          r.createdAt.toLowerCase(),
+          if (displayNumber > 0) ...[
+            'record $displayNumber',
+            'record#$displayNumber',
+            'record-$displayNumber',
+            'record_$displayNumber',
+            'rec $displayNumber',
+          ],
+        ];
+
+        // direct contains
+        if (aliases.any((a) => a.contains(q))) return true;
+
+        // normalized contains (handles separators/spaces)
+        final aliasesNorm = aliases.map(norm);
+        return aliasesNorm.any((a) => a.contains(qNorm));
       }).toList();
     }
 
@@ -1121,9 +1158,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
                       )
                     else
                       ..._records.asMap().entries.map((e) {
-                        final displayNumber =
-                            _allRecords.length -
-                            _allRecords.indexWhere((x) => x.id == e.value.id);
+                        final displayNumber = _displayNumberFor(e.value);
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: _recordCard(e.value, displayNumber),
